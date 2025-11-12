@@ -96,8 +96,8 @@ registry.register(
 );
 
 registry.register(
-	'zoho crm',
-	new OAuthProvider('zoho crm', 'https://accounts.zoho.com/oauth/v2/auth', 'https://accounts.zoho.com/oauth/v2/token', [
+	'zoho',
+	new OAuthProvider('zoho', 'https://accounts.zoho.com/oauth/v2/auth', 'https://accounts.zoho.com/oauth/v2/token', [
 		'ZohoCRM.modules.ALL',
 	]),
 );
