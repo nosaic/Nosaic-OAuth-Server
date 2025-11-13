@@ -1,0 +1,7 @@
+{
+  "prettier": {
+    "allowed": true
+  },
+  "enable_language_server": true,
+  "hard_tabs": true
+}

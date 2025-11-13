@@ -97,9 +97,7 @@ registry.register(
 
 registry.register(
 	'zoho',
-	new OAuthProvider('zoho', 'https://accounts.zoho.com/oauth/v2/auth', 'https://accounts.zoho.com/oauth/v2/token', [
-		'ZohoCRM.modules.ALL',
-	]),
+	new OAuthProvider('zoho', 'https://accounts.zoho.com/oauth/v2/auth', 'https://accounts.zoho.com/oauth/v2/token', ['ZohoCRM.modules.ALL']),
 );
 
 // === Encryption Utilities ===
@@ -169,7 +167,7 @@ class N8nStorage {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
-				Authorization: `Bearer ${this.webhookKey}`,
+				Authorization: `${this.webhookKey}`,
 			},
 			body: JSON.stringify({
 				action: 'store_token',
