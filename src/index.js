@@ -2,11 +2,12 @@ import { getAssetFromKV } from '@cloudflare/kv-asset-handler';
 
 // === OAuth Provider Configuration ===
 class OAuthProvider {
-	constructor(name, authUrl, tokenUrl, scopes = []) {
+	constructor(name, authUrl, tokenUrl, scopes = [], category = '') {
 		this.name = name;
 		this.authUrl = authUrl;
 		this.tokenUrl = tokenUrl;
 		this.scopes = scopes;
+		this.category = category;
 	}
 
 	getClientId(env) {
@@ -67,11 +68,22 @@ class ProviderRegistry {
 	has(id) {
 		return this.providers.has(id);
 	}
+	getByCategory() {
+		const categories = {};
+		for (const [id, provider] of this.providers) {
+			if (!categories[provider.category]) {
+				categories[provider.category] = [];
+			}
+			categories[provider.category].push({ id, provider });
+		}
+		return categories;
+	}
 }
 
 // Initialize providers
 const registry = new ProviderRegistry();
 
+// CRM Providers
 registry.register(
 	'salesforce',
 	new OAuthProvider(
@@ -79,25 +91,58 @@ registry.register(
 		'https://login.salesforce.com/services/oauth2/authorize',
 		'https://login.salesforce.com/services/oauth2/token',
 		['api', 'refresh_token'],
+		'CRM',
 	),
 );
 
 registry.register(
 	'hubspot',
-	new OAuthProvider('hubspot', 'https://app.hubspot.com/oauth/authorize', 'https://api.hubapi.com/oauth/v1/token', [
-		'crm.objects.contacts.read',
-		'crm.objects.companies.read',
-	]),
-);
-
-registry.register(
-	'intercom',
-	new OAuthProvider('intercom', 'https://app.intercom.com/oauth', 'https://api.intercom.io/auth/eagle/token', []),
+	new OAuthProvider(
+		'hubspot',
+		'https://app.hubspot.com/oauth/authorize',
+		'https://api.hubapi.com/oauth/v1/token',
+		['crm.objects.contacts.read', 'crm.objects.companies.read'],
+		'CRM',
+	),
 );
 
 registry.register(
 	'zoho',
-	new OAuthProvider('zoho', 'https://accounts.zoho.com/oauth/v2/auth', 'https://accounts.zoho.com/oauth/v2/token', ['ZohoCRM.modules.ALL']),
+	new OAuthProvider(
+		'zoho',
+		'https://accounts.zoho.com/oauth/v2/auth',
+		'https://accounts.zoho.com/oauth/v2/token',
+		['ZohoCRM.modules.ALL'],
+		'CRM',
+	),
+);
+
+// Customer Support Providers
+registry.register(
+	'intercom',
+	new OAuthProvider('intercom', 'https://app.intercom.com/oauth', 'https://api.intercom.io/auth/eagle/token', [], 'Customer Support'),
+);
+
+registry.register(
+	'zendesk',
+	new OAuthProvider(
+		'zendesk',
+		'https://{{subdomain}}.zendesk.com/oauth/authorizations/new',
+		'https://{{subdomain}}.zendesk.com/oauth/tokens',
+		['read', 'write'],
+		'Customer Support',
+	),
+);
+
+registry.register(
+	'freshdesk',
+	new OAuthProvider(
+		'freshdesk',
+		'https://{{domain}}.freshdesk.com/oauth/authorize',
+		'https://{{domain}}.freshdesk.com/oauth/token',
+		['contacts:read', 'tickets:read'],
+		'Customer Support',
+	),
 );
 
 // === Encryption Utilities ===
@@ -188,12 +233,37 @@ class N8nStorage {
 	}
 }
 
+// === Session Manager ===
+class SessionManager {
+	constructor(kv) {
+		this.kv = kv;
+	}
+
+	async createSession(clientId, message, type) {
+		const sessionId = crypto.randomUUID();
+		await this.kv.put(
+			`session:${sessionId}`,
+			JSON.stringify({ clientId, message, type }),
+			{ expirationTtl: 300 }, // 5 minutes
+		);
+		return sessionId;
+	}
+
+	async getSession(sessionId) {
+		const data = await this.kv.get(`session:${sessionId}`);
+		if (!data) return null;
+		await this.kv.delete(`session:${sessionId}`);
+		return JSON.parse(data);
+	}
+}
+
 // === Router ===
 class Router {
 	constructor(env) {
 		this.env = env;
 		this.encryptor = new Encryptor(env.ENCRYPTION_KEY);
 		this.storage = new N8nStorage(env.N8N_WEBHOOK_URL, env.N8N_WEBHOOK_KEY);
+		this.sessions = new SessionManager(env.SESSIONS);
 		this.corsHeaders = {
 			'Access-Control-Allow-Origin': '*',
 			'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -209,6 +279,11 @@ class Router {
 			return new Response(null, { headers: this.corsHeaders });
 		}
 
+		// Route: Get session message
+		if (path === '/api/session' && request.method === 'GET') {
+			return this.handleGetSession(url);
+		}
+
 		// Route: Initiate OAuth
 		if (path.startsWith('/auth/')) {
 			return this.handleAuth(url, path);
@@ -221,6 +296,21 @@ class Router {
 
 		// Route: Serve static assets
 		return this.handleStatic(request);
+	}
+
+	async handleGetSession(url) {
+		const sessionId = url.searchParams.get('session_id');
+		if (!sessionId) {
+			return new Response(JSON.stringify({ error: 'session_id required' }), {
+				status: 400,
+				headers: { 'Content-Type': 'application/json', ...this.corsHeaders },
+			});
+		}
+
+		const session = await this.sessions.getSession(sessionId);
+		return new Response(JSON.stringify(session || {}), {
+			headers: { 'Content-Type': 'application/json', ...this.corsHeaders },
+		});
 	}
 
 	async handleAuth(url, path) {
@@ -249,13 +339,14 @@ class Router {
 		const stateParam = url.searchParams.get('state');
 		const error = url.searchParams.get('error');
 
-		if (error) {
-			return Response.redirect(`${this.env.FRONTEND_URL}?error=${error}`, 302);
-		}
-
 		const state = StateManager.parse(stateParam);
 		if (!state) {
 			return new Response('Invalid state', { status: 400 });
+		}
+
+		if (error) {
+			const sessionId = await this.sessions.createSession(state.clientId, `Authentication failed: ${error}`, 'error');
+			return Response.redirect(`${this.env.FRONTEND_URL}?client_id=${state.clientId}&session_id=${sessionId}`, 302);
 		}
 
 		const provider = registry.get(providerId);
@@ -274,9 +365,11 @@ class Router {
 
 			await this.storage.storeToken(state.clientId, providerId, tokens, this.encryptor);
 
-			return Response.redirect(`${this.env.FRONTEND_URL}?success=true&provider=${providerId}`, 302);
+			const sessionId = await this.sessions.createSession(state.clientId, `${provider.name} connected successfully`, 'success');
+			return Response.redirect(`${this.env.FRONTEND_URL}?client_id=${state.clientId}&session_id=${sessionId}`, 302);
 		} catch (err) {
-			return Response.redirect(`${this.env.FRONTEND_URL}?error=${encodeURIComponent(err.message)}`, 302);
+			const sessionId = await this.sessions.createSession(state.clientId, err.message, 'error');
+			return Response.redirect(`${this.env.FRONTEND_URL}?client_id=${state.clientId}&session_id=${sessionId}`, 302);
 		}
 	}
 

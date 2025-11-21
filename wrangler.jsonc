@@ -7,6 +7,10 @@
 	"name": "nosaic-oauth-server",
 	"main": "src/index.js",
 	"compatibility_date": "2025-11-11",
+	/**
+	 * Static Assets
+	 * https://developers.cloudflare.com/workers/static-assets/binding/
+	 */
 	"assets": {
 		// The path to the directory containing the `index.html` file to be served at `/`
 		"directory": "./public",
@@ -63,13 +67,14 @@
 	 * https://developers.cloudflare.com/workers/configuration/secrets/
 	 */
 	/**
-	 * Static Assets
-	 * https://developers.cloudflare.com/workers/static-assets/binding/
-	 */
-	// "assets": { "directory": "./public/", "binding": "ASSETS" }
-	/**
 	 * Service Bindings (communicate between multiple Workers)
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
 	 */
 	// "services": [{ "binding": "MY_SERVICE", "service": "my-service" }]
+	"kv_namespaces": [
+		{
+			"binding": "SESSIONS",
+			"id": "2bde11f4f91e46a488ada8c55eac80d7",
+		},
+	],
 }
